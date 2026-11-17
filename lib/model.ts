@@ -518,38 +518,64 @@ export function parseSnapshot(text: string): Snapshot {
   } catch {
     throw new SnapshotError('snapshot.json is not JSON');
   }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new SnapshotError('snapshot.json is not a JSON object');
-  const o = raw as Record<string, unknown>;
-  if (typeof o.as_of !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.as_of)) throw new SnapshotError('snapshot.json has no as_of date');
-  if (typeof o.source !== 'string') throw new SnapshotError('snapshot.json has no source');
-  if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) throw new SnapshotError('snapshot.json has no floor_usd');
-  if (!Array.isArray(o.protocols)) throw new SnapshotError('snapshot.json has no protocols array');
-  if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
-  const protocols = o.protocols.map((v, i) => {
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
-    const p = v as Record<string, unknown>;
-    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new SnapshotError('snapshot.json is not a JSON object');
+  }
+  const doc = raw as Record<string, unknown>;
+  const asOf = doc.as_of;
+  if (typeof asOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(asOf)) {
+    throw new SnapshotError('snapshot.json has no as_of date');
+  }
+  const source = doc.source;
+  if (typeof source !== 'string') throw new SnapshotError('snapshot.json has no source');
+  const floor = doc.floor_usd;
+  if (typeof floor !== 'number' || !Number.isSafeInteger(floor) || floor <= 0) {
+    throw new SnapshotError('snapshot.json has no floor_usd');
+  }
+  const rawProtocols = doc.protocols;
+  if (!Array.isArray(rawProtocols)) {
+    throw new SnapshotError('snapshot.json has no protocols array');
+  }
+  const rawWatchlist = doc.watchlist;
+  if (!Array.isArray(rawWatchlist) || rawWatchlist.some((s) => typeof s !== 'string')) {
+    throw new SnapshotError('snapshot.json has no watchlist of slugs');
+  }
+  const protocols: SnapshotProtocol[] = rawProtocols.map((entry, i) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
+    }
+    const p = entry as Record<string, unknown>;
+    const slug = p.slug;
+    const name = p.name;
+    const tvl = p.tvl_usd;
+    if (typeof slug !== 'string' || typeof name !== 'string' || typeof tvl !== 'number' || !Number.isFinite(tvl)) {
       throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
     }
+    const numOrNull = (v: unknown): number | null =>
+      typeof v === 'number' && Number.isFinite(v) ? v : null;
+    const strOrNull = (v: unknown): string | null =>
+      typeof v === 'string' ? v : null;
     return {
-      slug: p.slug,
-      name: p.name,
-      category: typeof p.category === 'string' ? p.category : null,
-      chains: Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [],
-      tvl_usd: p.tvl_usd,
-      change_7d: typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : null,
-      mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) ? p.mcap_usd : null,
-      listed_at: typeof p.listed_at === 'string' ? p.listed_at : null,
-      gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id : null,
-      symbol: typeof p.symbol === 'string' ? p.symbol : null,
+      slug,
+      name,
+      category: strOrNull(p.category),
+      chains: Array.isArray(p.chains)
+        ? p.chains.filter((c): c is string => typeof c === 'string')
+        : [],
+      tvl_usd: tvl,
+      change_7d: numOrNull(p.change_7d),
+      mcap_usd: numOrNull(p.mcap_usd),
+      listed_at: strOrNull(p.listed_at),
+      gecko_id: strOrNull(p.gecko_id),
+      symbol: strOrNull(p.symbol),
     };
   });
   return {
-    as_of: o.as_of,
-    source: o.source,
-    floor_usd: o.floor_usd,
+    as_of: asOf,
+    source,
+    floor_usd: floor,
     protocols,
-    watchlist: o.watchlist as string[],
+    watchlist: rawWatchlist as string[],
   };
 }
 
