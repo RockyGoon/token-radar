@@ -30,7 +30,7 @@
   // number board.json carries, so the page's code and the board's data are visibly the same arithmetic.
   // TVL is the size of the prize; growth is its direction; age is how long it has run with no token;
   // chain count is reach; category is launch-readiness (a wrapper of an existing token is worth less).
-  var WRAPPER_CATEGORIES = ['bridge', 'canonical bridge', 'liquid staking', 'liquid restaking', 'restaked btc', 'cex'];
+  var WRAPPER_CATEGORIES = ['bridge', 'canonical bridge', 'cross chain bridge', 'liquid staking', 'liquid restaking', 'restaking', 'staking pool', 'restaked btc', 'anchor btc', 'decentralized btc', 'stablecoin wrapper', 'dual-token stablecoin', 'liquidity manager', 'cex'];
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
@@ -153,17 +153,24 @@
   }
   function farmSteps(p) {
     var chain = chainOf(p);
+    var second = p.chains && p.chains.length > 1 ? p.chains[1] : null;
     var gas = gasToken(chain);
     var capital = capitalFor(p);
     var hold = holdDaysFor(p.age_days);
     var pricey = (chain || '').toLowerCase() === 'ethereum';
+    var gasSetup = capital >= 150 ? 8 : 4;
+    var step2Text = actionFor(p, capital, chain) + (second === null ? '' : ' ' + p.name + ' also runs on ' + second + ': repeat the position there with half the capital so the activity is counted on both chains.');
+    var step2Cost = second === null
+      ? '$' + capital + ' of capital and about $' + gasSetup + ' of gas'
+      : '$' + capital + ' of capital on ' + chain + ' plus $' + Math.round(capital / 2) + ' on ' + second + ', and about $' + (gasSetup + 4) + ' of gas';
     return [
       { text: 'Open a fresh wallet on ' + chain + ' to farm ' + p.name + ' and fund it with ' + gas + ' for fees plus the $' + capital + ' you plan to farm. Keep the seed phrase offline.', cost: pricey ? 'about $5 of ' + gas + ' for the first transaction' : 'a little ' + gas + ' for the first transaction', time: '5 minutes' },
-      { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
+      { text: step2Text, cost: step2Cost, time: '15 minutes to set up' },
       { text: weeklyFor(p), cost: pricey ? 'about $5 of gas a week' : 'about $2 of gas a week', time: '10 minutes a week' },
       { text: 'Hold the ' + p.name + ' position for at least ' + hold + ' days on ' + chain + ' so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
       { text: 'Before you withdraw, ' + claimFor(p) + '. Claim only from the link the protocol itself publishes.', cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
-      { text: 'Write the wallet, the ' + chain + ' transactions and the dates in a farm log for ' + p.name + ', so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
+      { text: 'Write the wallet, the ' + chain + ' transactions and the dates in a farm log for ' + p.name + ', so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' },
+      { text: 'When ' + p.name + ' announces a token, claim inside its window from the link the protocol itself publishes, then unwind the position in two or three tranches over a week so you are not the exit liquidity. If no token is announced, keep the position and re-check the points page monthly.', cost: pricey ? 'the claim\'s gas only, plus about $10 of gas to unwind' : 'the claim\'s gas only, plus about $4 of gas to unwind', time: '30 minutes across the claim week' }
     ].map(stepText);
   }
 
@@ -386,7 +393,7 @@
         el('div', null, el('dt', { text: 'Growth' }), el('dd', { text: 'Seven-day TVL change, clamped to ' + m.growth_floor + '% .. +' + m.growth_cap + '%, weighted ' + m.growth_weight + ': the direction the prize is moving.' })),
         el('div', null, el('dt', { text: 'Maturity' }), el('dd', { text: 'How long it has run with no token: ' + m.maturity_floor + ' plus up to ' + m.maturity_range + ' over ' + m.maturity_days + ' days. An unlisted age uses ' + m.unknown_age_days + ' days.' })),
         el('div', null, el('dt', { text: 'Chain diversity' }), el('dd', { text: 'One plus ' + m.diversity_step + ' per extra chain, up to ' + m.diversity_cap + ' extra: more chains, more users to reward and more surface to farm.' })),
-        el('div', null, el('dt', { text: 'Category x ' + m.category_wrapper }), el('dd', { text: 'A bridge or liquid-staking wrapper is a product of a token that already trades, so its own launch is worth ' + m.category_wrapper + 'x a venue of the same size. Every other category is 1.00.' }))
+        el('div', null, el('dt', { text: 'Category x ' + m.category_wrapper }), el('dd', { text: 'A wrapper, bridge, staking or restaking pool, BTC or stablecoin wrapper, liquidity manager or CEX is a product of a token that already trades, so its own launch is worth ' + m.category_wrapper + 'x a venue of the same size. The category name decides, never the protocol name. Every other category is 1.00.' }))
       ),
       el('p', { class: 'sub', text: 'TVL, seven-day growth, age, chains and category come from the snapshot. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' })
     );
@@ -406,7 +413,8 @@
       el('div', null,
         el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size }),
         el('h2', { id: 'detail-title', text: row.name }),
-        el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains && row.chains.length ? row.chains.join(', ') : 'an unnamed chain') + ' - records no token' })
+        el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains && row.chains.length ? row.chains.join(', ') : 'an unnamed chain') + ' - records no token' }),
+        el('p', { class: 'thesis', text: row.thesis })
       ),
       el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })
     ));
