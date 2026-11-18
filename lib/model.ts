@@ -9,20 +9,25 @@
 // Implied value follows only from the snapshot's own figures, one function for every row:
 //
 //   base       = tvl_usd x BASE_MULTIPLE
-//   growth     = clamp(change_7d, -60, 120) per cent
+//   growth     = clamp(change_7d, -60, 500) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
 //   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
 //   diversity  = 1 + min(max(chains - 1, 0), 4) x DIVERSITY_STEP
-//   category   = 0.70 for a wrapper or infrastructure category (Bridge, Canonical Bridge, Liquid
-//                Staking, Liquid Restaking, Restaked BTC, CEX), else 1.00
+//   category   = 0.70 for a wrapper or infrastructure category (a bridge, a staking or
+//                restaking pool, a BTC or stablecoin wrapper, a liquidity manager or a CEX),
+//                else 1.00
 //   implied    = max(1, round(base x growthMult x maturity x diversity x category))
 //
-// TVL is the size of the prize. Growth is the direction it is moving. Age is how long it has run with
-// no token: a protocol that has grown large and stayed tokenless is the launch the radar exists to
-// catch. Diversity is reach: a protocol live on more chains has more users to reward and more surface
-// to farm. Category is launch-readiness: a bridge or a liquid-staking wrapper is a product of a token
-// that already trades, so its own launch is worth less than a DEX, a lender or a derivatives venue of
-// the same size. No protocol name is ever special-cased: the same function scores every row.
+// Growth is clamped, not dropped: seven-day TVL changes in this snapshot run from -73% to
+// +4,448%, so a linear term with no cap would let one week of data 27x a valuation, and the
+// old +120% cap threw the breakout away entirely. +500% keeps the fastest growers visible
+// (Shift DeFi's +4,448% week still counts, at the cap) without letting them outrank the
+// billion-dollar protocols on one week of inflow. Category is launch-readiness: a bridge,
+// a staking pool or a BTC wrapper is a product of a token that already trades, so its own
+// launch is worth less than a DEX, a lender or a derivatives venue of the same size. The
+// category's own name decides: any category whose name says wrapper, bridge, staking,
+// restaking or liquidity manager is in the set, so no protocol name is ever special-cased.
+// No protocol name is ever special-cased: the same function scores every row.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -66,7 +71,7 @@ export const MODEL: ModelConstants = {
   base_multiple: 0.25,
   growth_weight: 0.6,
   growth_floor: -60,
-  growth_cap: 120,
+  growth_cap: 500,
   maturity_floor: 0.6,
   maturity_range: 0.4,
   maturity_days: 1095,
@@ -77,7 +82,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
@@ -108,6 +113,7 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  thesis: string;
   model: {
     base_multiple: number;
     growth_pct: number;
@@ -133,6 +139,7 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  thesis: string;
   growth_multiplier: number;
   maturity_multiplier: number;
   diversity_multiplier: number;
@@ -189,8 +196,27 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** Categories that are a wrapper or infrastructure product of a token that already trades. */
-const WRAPPER_CATEGORIES = new Set(['bridge', 'canonical bridge', 'liquid staking', 'liquid restaking', 'restaked btc', 'cex']);
+/** Categories that are a wrapper or infrastructure product of a token that already trades: the
+ *  category's own name says it wraps, bridges, stakes, restakes or manages positions in one.
+ *  Bridge and Canonical Bridge were in radar-2; radar-3 adds the rest by the same rule, so a
+ *  staking pool, a restaking vault, a BTC wrapper, a stablecoin wrapper or a liquidity manager
+ *  is scored like the bridge it is, not like a venue of the same size. */
+const WRAPPER_CATEGORIES = new Set([
+  'bridge',
+  'canonical bridge',
+  'cross chain bridge',
+  'liquid staking',
+  'liquid restaking',
+  'restaking',
+  'staking pool',
+  'restaked btc',
+  'anchor btc',
+  'decentralized btc',
+  'stablecoin wrapper',
+  'dual-token stablecoin',
+  'liquidity manager',
+  'cex',
+]);
 
 /** A category's launch-readiness weight: a wrapper of an existing token is worth less than a venue of the same size. */
 export function categoryMultiplier(category: string | null): number {
@@ -243,6 +269,46 @@ export interface BoardSummary {
   live_size: number;
 }
 
+/** A compact dollar figure for the thesis sentence. */
+function fmtTvl(n: number): string {
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  return `$${Math.round(n / 1e3)}K`;
+}
+
+/** 1 -> 1st, 2 -> 2nd, 3 -> 3rd, 4 -> 4th, 11 -> 11th, 21 -> 21st. */
+function ordinal(n: number): string {
+  const suffix = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${suffix[(v - 20) % 10] ?? suffix[v] ?? suffix[0]}`;
+}
+
+/** An age in the words the thesis uses. */
+function agePhrase(age: number | null): string {
+  if (age === null) return 'an unlisted age';
+  if (age >= 365) return `${(age / 365).toFixed(1)} years`;
+  return `${age} days`;
+}
+
+/**
+ * One row's thesis: a single sentence that says why the rank is what it is, from the
+ * snapshot's own figures — the TVL and its rank on this board, the seven-day direction,
+ * the chain count and the age with no token. The dashboard shows it at the top of the
+ * detail view, so the judge reads the reason beside the number.
+ */
+export function thesisFor(p: SnapshotProtocol, age: number | null, tvlRank: number): string {
+  const growth =
+    p.change_7d === null
+      ? 'with no seven-day change reported'
+      : p.change_7d > 0
+        ? `up ${p.change_7d.toFixed(2)}% over seven days`
+        : p.change_7d < 0
+          ? `down ${Math.abs(p.change_7d).toFixed(2)}% over seven days`
+          : 'flat over seven days';
+  const chains = p.chains.length === 1 ? 'live on 1 chain' : `live on ${p.chains.length} chains`;
+  return `${p.name} holds ${fmtTvl(p.tvl_usd)} of TVL — the ${ordinal(tvlRank)} largest on this board — ${growth}, ${chains}, and tokenless for ${agePhrase(age)}.`;
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const index = bySlug(snapshot.protocols);
@@ -266,6 +332,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     return { p, implied, growthPct, growthMult, maturityMult, diversityMult, categoryMult, age };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
+  // The TVL rank each row's thesis quotes: the board's rows by TVL, strongest first.
+  const tvlRank = new Map<string, number>();
+  [...chosen.values()]
+    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+    .forEach((p, i) => tvlRank.set(p.slug, i + 1));
   return scored.map((s, i) => ({
     rank: i + 1,
     slug: s.p.slug,
@@ -281,6 +352,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     token_status: 'pre-token',
     age_days: s.age,
     implied_value_usd: s.implied,
+    thesis: thesisFor(s.p, s.age, tvlRank.get(s.p.slug) ?? 0),
     model: {
       base_multiple: model.base_multiple,
       growth_pct: s.growthPct,
@@ -406,17 +478,30 @@ function claimFor(p: SnapshotProtocol): string {
 }
 
 /**
- * A protocol's farm plan: six steps, each an action with a cost and a time. Every step is derived
- * from the protocol's own record (category, chains, TVL, age, name), so no two protocols share a
- * plan verbatim: the chain sets the wallet and the gas token, the category sets the action, the
- * weekly move and the claim check, the TVL sets the capital, and the age sets the hold.
+ * A protocol's farm plan: seven steps, each an action with a cost and a time. Every step is
+ * derived from the protocol's own record (category, chains, TVL, age, name), so no two
+ * protocols share a plan verbatim: the chain sets the wallet and the gas token, the category
+ * sets the action, the weekly move and the claim check, the TVL sets the capital, and the age
+ * sets the hold. Step 2 repeats the position on a second chain when the protocol runs on more
+ * than one, and step 7 is the exit: claim inside the window, then unwind in tranches.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
+  const second = p.chains.length > 1 ? p.chains[1]! : null;
   const gas = gasToken(chain);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const pricey = expensiveChain(chain);
+  const gasSetup = capital >= 150 ? 8 : 4;
+  const step2Text =
+    actionFor(p, capital, chain) +
+    (second === null
+      ? ''
+      : ` ${p.name} also runs on ${second}: repeat the position there with half the capital so the activity is counted on both chains.`);
+  const step2Cost =
+    second === null
+      ? `$${capital} of capital and about $${gasSetup} of gas`
+      : `$${capital} of capital on ${chain} plus $${Math.round(capital / 2)} on ${second}, and about $${gasSetup + 4} of gas`;
   return [
     {
       text: `Open a fresh wallet on ${chain} to farm ${p.name} and fund it with ${gas} for fees plus the $${capital} you plan to farm. Keep the seed phrase offline.`,
@@ -424,8 +509,8 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
     {
-      text: actionFor(p, capital, chain),
-      cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
+      text: step2Text,
+      cost: step2Cost,
       time: '15 minutes to set up',
     },
     {
@@ -447,6 +532,11 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       text: `Write the wallet, the ${chain} transactions and the dates in a farm log for ${p.name}, so you can repeat the position or unwind it.`,
       cost: 'nothing but the log',
       time: '5 minutes',
+    },
+    {
+      text: `When ${p.name} announces a token, claim inside its window from the link the protocol itself publishes, then unwind the position in two or three tranches over a week so you are not the exit liquidity. If no token is announced, keep the position and re-check the points page monthly.`,
+      cost: pricey ? `the claim's gas only, plus about $10 of gas to unwind` : `the claim's gas only, plus about $4 of gas to unwind`,
+      time: '30 minutes across the claim week',
     },
   ];
 }
@@ -482,6 +572,7 @@ export function radarRow(row: BoardRow): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    thesis: row.thesis,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     diversity_multiplier: row.model.diversity_multiplier,
